@@ -1,0 +1,22 @@
+name: woffia_harvester
+description: แอปควบคุมเครื่องเก็บไข่ผำด้วย ESP32 BLE
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  flutter_blue_plus: ^2.3.12
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
