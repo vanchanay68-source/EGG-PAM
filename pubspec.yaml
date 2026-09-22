@@ -1,5 +1,5 @@
-name: woffia_harvester
-description: แอปควบคุมเครื่องเก็บไข่ผำด้วย ESP32 BLE
+name: egg_pam
+description: แอปควบคุมเครื่องเก็บไข่ผำด้วย ESP32
 publish_to: "none"
 
 version: 1.0.0+1
@@ -10,8 +10,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-
-  flutter_blue_plus: ^2.3.12
+  cupertino_icons: ^1.0.8
+  flutter_blue_plus: 2.3.12
 
 dev_dependencies:
   flutter_test:
