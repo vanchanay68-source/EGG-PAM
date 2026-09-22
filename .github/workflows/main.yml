@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build EGG-PAM APK
 
 on:
   workflow_dispatch:
@@ -21,6 +21,59 @@ jobs:
 
       - name: Flutter version
         run: flutter --version
+
+      - name: Remove incomplete Android project
+        run: rm -rf android
+
+      - name: Create Android project
+        run: flutter create --platforms=android .
+
+      - name: Configure BLE permissions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+
+          permissions = """
+              <uses-feature
+                  android:name="android.hardware.bluetooth_le"
+                  android:required="true" />
+
+              <uses-permission
+                  android:name="android.permission.BLUETOOTH_SCAN"
+                  android:usesPermissionFlags="neverForLocation" />
+
+              <uses-permission
+                  android:name="android.permission.BLUETOOTH_CONNECT" />
+
+              <uses-permission
+                  android:name="android.permission.BLUETOOTH"
+                  android:maxSdkVersion="30" />
+
+              <uses-permission
+                  android:name="android.permission.BLUETOOTH_ADMIN"
+                  android:maxSdkVersion="30" />
+
+              <uses-permission
+                  android:name="android.permission.ACCESS_FINE_LOCATION"
+                  android:maxSdkVersion="30" />
+          """
+
+          s = s.replace(
+              '<application',
+              permissions + '\n    <application',
+              1
+          )
+
+          s = s.replace(
+              'android:label="flutter_application_1"',
+              'android:label="เครื่องเก็บไข่ผำ"'
+          )
+
+          p.write_text(s)
+          PY
 
       - name: Get dependencies
         run: flutter pub get
