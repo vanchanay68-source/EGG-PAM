@@ -1,16 +1,21 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
+const String serviceUuid =
+    '6E400001-B5A3-F393-E0A9-E50E24DCCA9E';
+
+const String characteristicUuid =
+    '6E400002-B5A3-F393-E0A9-E50E24DCCA9E';
+
 void main() {
-  runApp(const WoffiaHarvesterApp());
+  runApp(const EggPamApp());
 }
 
-class WoffiaHarvesterApp extends StatelessWidget {
-  const WoffiaHarvesterApp({super.key});
+class EggPamApp extends StatelessWidget {
+  const EggPamApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -34,223 +39,161 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  // ============================================================
-  // ESP32 BLE UUID
-  // ============================================================
-
-  static final Guid serviceUuid =
-      Guid("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
-
-  static final Guid characteristicUuid =
-      Guid("6E400002-B5A3-F393-E0A9-E50E24DCCA9E");
-
-  // ============================================================
-  // Bluetooth
-  // ============================================================
-
   BluetoothDevice? device;
-  BluetoothCharacteristic? commandCharacteristic;
+  BluetoothCharacteristic? characteristic;
 
-  StreamSubscription<List<ScanResult>>? scanSubscription;
-  StreamSubscription<BluetoothConnectionState>? connectionSubscription;
+  StreamSubscription<List<ScanResult>>? scanSub;
+  StreamSubscription<BluetoothConnectionState>? connectionSub;
+
+  List<ScanResult> results = [];
 
   bool scanning = false;
   bool connected = false;
 
-  String status = "ยังไม่ได้เชื่อมต่อ";
-  String deviceName = "-";
-
-  List<ScanResult> scanResults = [];
-
-  // ============================================================
-  // INIT
-  // ============================================================
-
-  @override
-  void initState() {
-    super.initState();
-
-    FlutterBluePlus.adapterState.listen((state) {
-      if (!mounted) return;
-
-      if (state != BluetoothAdapterState.on) {
-        setState(() {
-          connected = false;
-          status = "กรุณาเปิด Bluetooth";
-        });
-      }
-    });
-  }
+  String status = 'ยังไม่ได้เชื่อมต่อ';
 
   @override
   void dispose() {
-    scanSubscription?.cancel();
-    connectionSubscription?.cancel();
-
-    if (device != null) {
-      device!.disconnect();
-    }
-
+    scanSub?.cancel();
+    connectionSub?.cancel();
     super.dispose();
   }
 
-  // ============================================================
-  // SCAN BLE
-  // ============================================================
-
-  Future<void> scanDevices() async {
+  Future<void> scan() async {
     if (scanning) return;
 
     setState(() {
       scanning = true;
-      scanResults.clear();
-      status = "กำลังค้นหา ESP32...";
+      results = [];
+      status = 'กำลังค้นหา ESP32...';
     });
 
     try {
-      await FlutterBluePlus.stopScan();
+      await scanSub?.cancel();
 
-      scanSubscription?.cancel();
+      scanSub = FlutterBluePlus.scanResults.listen((list) {
+        if (!mounted) return;
 
-      scanSubscription = FlutterBluePlus.onScanResults.listen(
-        (results) {
-          if (!mounted) return;
+        final Map<String, ScanResult> unique = {};
 
-          final Map<String, ScanResult> uniqueDevices = {};
+        for (final r in list) {
+          final id = r.device.remoteId.toString();
 
-          for (final result in results) {
-            uniqueDevices[result.device.remoteId.toString()] = result;
+          if (r.device.platformName.isNotEmpty) {
+            unique[id] = r;
           }
+        }
 
-          setState(() {
-            scanResults = uniqueDevices.values.toList();
-          });
-        },
-        onError: (error) {
-          if (!mounted) return;
-
-          setState(() {
-            status = "เกิดข้อผิดพลาดในการค้นหา";
-          });
-        },
-      );
+        setState(() {
+          results = unique.values.toList();
+        });
+      });
 
       await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 6),
+        timeout: const Duration(seconds: 8),
       );
 
-      if (!mounted) return;
-
-      setState(() {
-        scanning = false;
-        status = scanResults.isEmpty
-            ? "ไม่พบ ESP32"
-            : "พบอุปกรณ์ ${scanResults.length} เครื่อง";
-      });
+      await Future.delayed(
+        const Duration(milliseconds: 300),
+      );
     } catch (e) {
-      if (!mounted) return;
+      if (mounted) {
+        setState(() {
+          status = 'ค้นหาไม่สำเร็จ: $e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          scanning = false;
 
-      setState(() {
-        scanning = false;
-        status = "สแกนไม่ได้: $e";
-      });
+          if (results.isEmpty) {
+            status = 'ไม่พบ ESP32';
+          }
+        });
+      }
     }
   }
 
-  // ============================================================
-  // CONNECT
-  // ============================================================
-
-  Future<void> connectToDevice(BluetoothDevice selectedDevice) async {
+  Future<void> connectToDevice(
+    BluetoothDevice selected,
+  ) async {
     try {
-      await FlutterBluePlus.stopScan();
-
       setState(() {
-        status = "กำลังเชื่อมต่อ...";
+        status = 'กำลังเชื่อมต่อ...';
       });
 
-      device = selectedDevice;
+      await FlutterBluePlus.stopScan();
 
-      connectionSubscription?.cancel();
+      await connectionSub?.cancel();
 
-      connectionSubscription = selectedDevice.connectionState.listen(
-        (state) {
-          if (!mounted) return;
+      connectionSub = selected.connectionState.listen((state) {
+        if (!mounted) return;
 
-          if (state == BluetoothConnectionState.connected) {
-            setState(() {
-              connected = true;
-              status = "เชื่อมต่อแล้ว";
-            });
-          }
+        setState(() {
+          connected =
+              state == BluetoothConnectionState.connected;
+        });
+      });
 
-          if (state == BluetoothConnectionState.disconnected) {
-            setState(() {
-              connected = false;
-              commandCharacteristic = null;
-              status = "ตัดการเชื่อมต่อแล้ว";
-            });
-          }
-        },
-      );
-
-      await selectedDevice.connect(
+      await selected.connect(
+        license: License.nonprofit,
         timeout: const Duration(seconds: 10),
       );
 
-      final services = await selectedDevice.discoverServices();
+      final services =
+          await selected.discoverServices();
 
-      BluetoothCharacteristic? foundCharacteristic;
+      BluetoothCharacteristic? found;
 
       for (final service in services) {
-        if (service.uuid == serviceUuid) {
-          for (final characteristic in service.characteristics) {
-            if (characteristic.uuid == characteristicUuid) {
-              foundCharacteristic = characteristic;
+        if (service.uuid.toString().toUpperCase() ==
+            serviceUuid.toUpperCase()) {
+          for (final c in service.characteristics) {
+            if (c.uuid.toString().toUpperCase() ==
+                characteristicUuid.toUpperCase()) {
+              found = c;
               break;
             }
           }
         }
 
-        if (foundCharacteristic != null) {
-          break;
-        }
+        if (found != null) break;
       }
 
-      if (foundCharacteristic == null) {
-        await selectedDevice.disconnect();
+      if (found == null) {
+        await selected.disconnect();
 
-        setState(() {
-          connected = false;
-          status = "ไม่พบ Characteristic ของ ESP32";
-        });
+        if (mounted) {
+          setState(() {
+            connected = false;
+            status =
+                'เชื่อมต่อได้ แต่ไม่พบ Characteristic';
+          });
+        }
 
         return;
       }
 
-      commandCharacteristic = foundCharacteristic;
-
-      final name = selectedDevice.platformName;
+      if (!mounted) return;
 
       setState(() {
+        device = selected;
+        characteristic = found;
         connected = true;
-        deviceName = name.isEmpty ? "ESP32" : name;
-        status = "เชื่อมต่อ ESP32 สำเร็จ";
+        status = 'เชื่อมต่อ ESP32 แล้ว';
       });
     } catch (e) {
-      setState(() {
-        connected = false;
-        commandCharacteristic = null;
-        status = "เชื่อมต่อไม่สำเร็จ";
-      });
+      if (mounted) {
+        setState(() {
+          connected = false;
+          status = 'เชื่อมต่อไม่สำเร็จ: $e';
+        });
+      }
     }
   }
 
-  // ============================================================
-  // DISCONNECT
-  // ============================================================
-
-  Future<void> disconnectDevice() async {
+  Future<void> disconnect() async {
     try {
       await device?.disconnect();
     } catch (_) {}
@@ -258,204 +201,121 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) return;
 
     setState(() {
+      device = null;
+      characteristic = null;
       connected = false;
-      commandCharacteristic = null;
-      deviceName = "-";
-      status = "ตัดการเชื่อมต่อแล้ว";
+      status = 'ตัดการเชื่อมต่อแล้ว';
     });
   }
 
-  // ============================================================
-  // SEND COMMAND
-  // ============================================================
-
-  Future<void> sendCommand(String command) async {
-    if (!connected || commandCharacteristic == null) {
+  Future<void> send(String command) async {
+    if (!connected || characteristic == null) {
+      setState(() {
+        status = 'ยังไม่ได้เชื่อมต่อ ESP32';
+      });
       return;
     }
 
     try {
-      final Uint8List data =
-          Uint8List.fromList(utf8.encode(command));
-
-      await commandCharacteristic!.write(
-        data,
+      await characteristic!.write(
+        Uint8List.fromList(command.codeUnits),
         withoutResponse: false,
       );
 
       if (!mounted) return;
 
       setState(() {
-        status = "ส่งคำสั่ง: $command";
+        status = 'ส่งคำสั่ง $command';
       });
     } catch (e) {
-      if (!mounted) return;
-
-      setState(() {
-        status = "ส่งคำสั่งไม่สำเร็จ";
-      });
+      if (mounted) {
+        setState(() {
+          status = 'ส่งคำสั่งไม่สำเร็จ: $e';
+        });
+      }
     }
   }
 
-  // ============================================================
-  // CONTROL BUTTON
-  // ============================================================
-
-  Widget controlButton({
-    required String text,
-    required IconData icon,
-    required String command,
-    double size = 90,
-  }) {
+  Widget button(
+    String text,
+    String command,
+    IconData icon,
+  ) {
     return SizedBox(
-      width: size,
-      height: size,
+      width: 105,
+      height: 70,
       child: ElevatedButton(
-        onPressed: connected
-            ? () {
-                sendCommand(command);
-              }
-            : null,
-        style: ElevatedButton.styleFrom(
-          shape: const CircleBorder(),
-          padding: EdgeInsets.zero,
-        ),
+        onPressed:
+            connected ? () => send(command) : null,
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment:
+              MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 32),
-            const SizedBox(height: 5),
-            Text(
-              text,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            Icon(icon),
+            const SizedBox(height: 3),
+            Text(text),
           ],
         ),
       ),
     );
   }
 
-  // ============================================================
-  // DEVICE LIST
-  // ============================================================
-
-  Widget deviceList() {
-    if (scanResults.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(20),
-        child: Text(
-          "กดค้นหาเพื่อค้นหา ESP32",
-          textAlign: TextAlign.center,
-        ),
-      );
-    }
-
-    return Column(
-      children: scanResults.map((result) {
-        final name = result.device.platformName.isEmpty
-            ? "อุปกรณ์ BLE"
-            : result.device.platformName;
-
-        return Card(
-          child: ListTile(
-            leading: const Icon(
-              Icons.bluetooth,
-              size: 32,
-            ),
-            title: Text(name),
-            subtitle: Text(
-              "${result.device.remoteId}\nRSSI: ${result.rssi}",
-            ),
-            trailing: ElevatedButton(
-              onPressed: () {
-                connectToDevice(result.device);
-              },
-              child: const Text("เชื่อมต่อ"),
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  // ============================================================
-  // UI
-  // ============================================================
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          "เครื่องเก็บไข่ผำ",
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
+        title: const Text('เครื่องเก็บไข่ผำ'),
         centerTitle: true,
       ),
-
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-
-              // ------------------------------------------------
-              // STATUS
-              // ------------------------------------------------
-
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
+                      const Icon(
+                        Icons.bluetooth,
+                        size: 55,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        status,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 15),
                       Row(
                         mainAxisAlignment:
                             MainAxisAlignment.center,
                         children: [
-                          Icon(
-                            connected
-                                ? Icons.bluetooth_connected
-                                : Icons.bluetooth_disabled,
-                            color: connected
-                                ? Colors.green
-                                : Colors.red,
-                            size: 30,
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            connected
-                                ? "เชื่อมต่อแล้ว"
-                                : "ยังไม่เชื่อมต่อ",
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: connected
-                                  ? Colors.green
-                                  : Colors.red,
+                          ElevatedButton.icon(
+                            onPressed:
+                                scanning ? null : scan,
+                            icon: const Icon(Icons.search),
+                            label: Text(
+                              scanning
+                                  ? 'กำลังค้นหา'
+                                  : 'ค้นหา ESP32',
                             ),
                           ),
+                          if (connected) ...[
+                            const SizedBox(width: 10),
+                            ElevatedButton.icon(
+                              onPressed: disconnect,
+                              icon: const Icon(
+                                Icons.link_off,
+                              ),
+                              label: const Text('ตัดการเชื่อมต่อ'),
+                            ),
+                          ],
                         ],
-                      ),
-
-                      const SizedBox(height: 10),
-
-                      Text(
-                        "อุปกรณ์: $deviceName",
-                        style: const TextStyle(
-                          fontSize: 16,
-                        ),
-                      ),
-
-                      const SizedBox(height: 5),
-
-                      Text(
-                        status,
-                        textAlign: TextAlign.center,
                       ),
                     ],
                   ),
@@ -464,160 +324,102 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 15),
 
-              // ------------------------------------------------
-              // SCAN / DISCONNECT
-              // ------------------------------------------------
-
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed:
-                          scanning ? null : scanDevices,
-                      icon: const Icon(Icons.search),
-                      label: Text(
-                        scanning
-                            ? "กำลังค้นหา..."
-                            : "ค้นหา ESP32",
+              if (results.isNotEmpty)
+                Card(
+                  child: Column(
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          'อุปกรณ์ที่พบ',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
-                    ),
+                      ...results.map(
+                        (r) => ListTile(
+                          leading:
+                              const Icon(Icons.bluetooth),
+                          title: Text(
+                            r.device.platformName,
+                          ),
+                          subtitle: Text(
+                            r.device.remoteId.toString(),
+                          ),
+                          trailing: ElevatedButton(
+                            onPressed: connected
+                                ? null
+                                : () => connectToDevice(
+                                      r.device,
+                                    ),
+                            child:
+                                const Text('เชื่อมต่อ'),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-
-                  const SizedBox(width: 10),
-
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed:
-                          connected ? disconnectDevice : null,
-                      icon: const Icon(Icons.bluetooth_disabled),
-                      label: const Text("ตัดการเชื่อมต่อ"),
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 10),
-
-              // ------------------------------------------------
-              // DEVICE LIST
-              // ------------------------------------------------
-
-              deviceList(),
+                ),
 
               const SizedBox(height: 20),
 
               const Text(
-                "ควบคุมเครื่อง",
+                'ควบคุมเครื่อง',
                 style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
                 ),
               ),
 
-              const SizedBox(height: 20),
-
-              // ------------------------------------------------
-              // FORWARD
-              // ------------------------------------------------
-
-              controlButton(
-                text: "เดินหน้า",
-                icon: Icons.arrow_upward,
-                command: "F",
-              ),
-
               const SizedBox(height: 15),
 
-              // ------------------------------------------------
-              // LEFT / STOP / RIGHT
-              // ------------------------------------------------
+              button(
+                'เดินหน้า',
+                'F',
+                Icons.arrow_upward,
+              ),
+
+              const SizedBox(height: 10),
 
               Row(
                 mainAxisAlignment:
                     MainAxisAlignment.center,
                 children: [
-
-                  controlButton(
-                    text: "ซ้าย",
-                    icon: Icons.arrow_back,
-                    command: "L",
+                  button(
+                    'ซ้าย',
+                    'L',
+                    Icons.arrow_back,
                   ),
-
-                  const SizedBox(width: 15),
-
-                  SizedBox(
-                    width: 90,
-                    height: 90,
-                    child: ElevatedButton(
-                      onPressed: connected
-                          ? () {
-                              sendCommand("S");
-                            }
-                          : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        foregroundColor: Colors.white,
-                        shape: const CircleBorder(),
-                      ),
-                      child: const Text(
-                        "หยุด",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                        ),
-                      ),
-                    ),
+                  const SizedBox(width: 8),
+                  button(
+                    'หยุด',
+                    'S',
+                    Icons.stop,
                   ),
-
-                  const SizedBox(width: 15),
-
-                  controlButton(
-                    text: "ขวา",
-                    icon: Icons.arrow_forward,
-                    command: "R",
+                  const SizedBox(width: 8),
+                  button(
+                    'ขวา',
+                    'R',
+                    Icons.arrow_forward,
                   ),
                 ],
               ),
 
-              const SizedBox(height: 15),
+              const SizedBox(height: 10),
 
-              // ------------------------------------------------
-              // REVERSE
-              // ------------------------------------------------
-
-              controlButton(
-                text: "ถอยหลัง",
-                icon: Icons.arrow_downward,
-                command: "B",
+              button(
+                'ถอยหลัง',
+                'B',
+                Icons.arrow_downward,
               ),
 
-              const SizedBox(height: 25),
+              const SizedBox(height: 20),
 
-              // ------------------------------------------------
-              // COMMAND INFORMATION
-              // ------------------------------------------------
-
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(15),
-                  child: Column(
-                    children: const [
-                      Text(
-                        "คำสั่งที่ส่งไป ESP32",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                        ),
-                      ),
-                      SizedBox(height: 10),
-                      Text("F = เดินหน้า"),
-                      Text("B = ถอยหลัง"),
-                      Text("L = เลี้ยวซ้าย"),
-                      Text("R = เลี้ยวขวา"),
-                      Text("S = หยุด"),
-                    ],
-                  ),
-                ),
+              const Text(
+                'F เดินหน้า   B ถอยหลัง   L ซ้าย   R ขวา   S หยุด',
+                textAlign: TextAlign.center,
               ),
             ],
           ),
